@@ -26,14 +26,6 @@ type categoryInput struct {
 	Type string `json:"type"`
 }
 
-func Categories(router *gin.Engine, db *sql.DB) {
-	router.POST("/categories", createCategory(db))
-	router.GET("/categories", listCategories(db))
-	router.GET("/categories/:id", getCategory(db))
-	router.PUT("/categories/:id", updateCategory(db))
-	router.DELETE("/categories/:id", deleteCategory(db))
-}
-
 func createCategory(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var input categoryInput

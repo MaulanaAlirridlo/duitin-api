@@ -20,7 +20,7 @@ func main() {
 	}
 	defer db.Close()
 
-	router := Router()
+	router := Router(db)
 	Categories(router, db)
 	Transactions(router, db)
 

@@ -39,14 +39,6 @@ type transactionInput struct {
 
 var transactionAmountPattern = regexp.MustCompile(`^-?[0-9]{1,13}(\.[0-9]{1,2})?$`)
 
-func Transactions(router *gin.Engine, db *sql.DB) {
-	router.POST("/transactions", createTransaction(db))
-	router.GET("/transactions", listTransactions(db))
-	router.GET("/transactions/:id", getTransaction(db))
-	router.PUT("/transactions/:id", updateTransaction(db))
-	router.DELETE("/transactions/:id", deleteTransaction(db))
-}
-
 func createTransaction(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var input transactionInput
