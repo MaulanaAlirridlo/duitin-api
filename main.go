@@ -20,9 +20,10 @@ func main() {
 	}
 	defer db.Close()
 
-	router := Router(db)
+	router := Router()
 	Categories(router, db)
 	Transactions(router, db)
+	Dashboard(router, db)
 
 	if err := router.Run(); err != nil {
 		log.Fatal(err)

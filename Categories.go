@@ -56,10 +56,36 @@ func createCategory(db *sql.DB) gin.HandlerFunc {
 
 func listCategories(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		page, ok := parsePageOptions(c)
+		if !ok {
+			return
+		}
+		filters := sqlFilters{}
+		if categoryType := strings.TrimSpace(c.Query("type")); categoryType != "" {
+			if categoryType != "income" && categoryType != "expense" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "type must be either income or expense"})
+				return
+			}
+			filters.add("type = ?", categoryType)
+		}
+		filters.addSearch("name", c.Query("search"))
+
+		var total int64
+		if err := db.QueryRowContext(c.Request.Context(),
+			"SELECT COUNT(*) FROM categories"+filters.where(),
+			filters.args...,
+		).Scan(&total); err != nil {
+			log.Printf("count categories: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not count categories"})
+			return
+		}
+
 		rows, err := db.QueryContext(c.Request.Context(),
 			`SELECT id, name, type, created_at
-			 FROM categories
-			 ORDER BY id`,
+			 FROM categories`+filters.where()+`
+			 ORDER BY id
+			 LIMIT $`+strconv.Itoa(len(filters.args)+1)+` OFFSET $`+strconv.Itoa(len(filters.args)+2),
+			filters.argsWith(page.Limit, page.Offset)...,
 		)
 		if err != nil {
 			log.Printf("list categories: %v", err)
@@ -83,7 +109,7 @@ func listCategories(db *sql.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not read categories"})
 			return
 		}
-		c.JSON(http.StatusOK, categories)
+		respondPaginated(c, categories, total, page)
 	}
 }
 

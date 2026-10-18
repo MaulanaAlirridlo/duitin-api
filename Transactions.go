@@ -90,10 +90,30 @@ func insertTransaction(c *gin.Context, db *sql.DB, input transactionInput) (Tran
 
 func listTransactions(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		page, ok := parsePageOptions(c)
+		if !ok {
+			return
+		}
+		filters, sortColumn, sortDirection, ok := transactionListFilters(c)
+		if !ok {
+			return
+		}
+		var total int64
+		if err := db.QueryRowContext(c.Request.Context(),
+			"SELECT COUNT(*) FROM transactions"+filters.where(),
+			filters.args...,
+		).Scan(&total); err != nil {
+			log.Printf("count transactions: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not count transactions"})
+			return
+		}
+
 		rows, err := db.QueryContext(c.Request.Context(),
 			`SELECT id, title, amount::text, type, category_id, transaction_date, description, created_at, updated_at
-			 FROM transactions
-			 ORDER BY transaction_date DESC, id DESC`,
+			 FROM transactions`+filters.where()+`
+			 ORDER BY `+sortColumn+` `+sortDirection+`, id DESC
+			 LIMIT $`+strconv.Itoa(len(filters.args)+1)+` OFFSET $`+strconv.Itoa(len(filters.args)+2),
+			filters.argsWith(page.Limit, page.Offset)...,
 		)
 		if err != nil {
 			log.Printf("list transactions: %v", err)
@@ -117,8 +137,55 @@ func listTransactions(db *sql.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not read transactions"})
 			return
 		}
-		c.JSON(http.StatusOK, transactions)
+		respondPaginated(c, transactions, total, page)
 	}
+}
+
+func transactionListFilters(c *gin.Context) (sqlFilters, string, string, bool) {
+	filters := sqlFilters{}
+	if transactionType := strings.TrimSpace(c.Query("type")); transactionType != "" {
+		if utf8.RuneCountInString(transactionType) > 20 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "type must be at most 20 characters"})
+			return filters, "", "", false
+		}
+		filters.add("type = ?", transactionType)
+	}
+	if rawCategoryID := strings.TrimSpace(c.Query("category_id")); rawCategoryID != "" {
+		categoryID, err := strconv.ParseInt(rawCategoryID, 10, 64)
+		if err != nil || categoryID < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "category_id must be a positive integer"})
+			return filters, "", "", false
+		}
+		filters.add("category_id = ?", categoryID)
+	}
+	dates, ok := parseDateRange(c, false)
+	if !ok {
+		return filters, "", "", false
+	}
+	addDateRange(&filters, "transaction_date", dates)
+	filters.addSearch("title", c.Query("search"))
+	filters.addSearch("description", c.Query("search"))
+
+	sortColumns := map[string]string{
+		"id":               "id",
+		"title":            "title",
+		"amount":           "amount",
+		"type":             "type",
+		"transaction_date": "transaction_date",
+		"created_at":       "created_at",
+	}
+	sortKey := strings.TrimSpace(c.DefaultQuery("sort_by", "transaction_date"))
+	sortColumn, exists := sortColumns[sortKey]
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "sort_by must be one of id, title, amount, type, transaction_date, created_at"})
+		return filters, "", "", false
+	}
+	direction := strings.ToUpper(strings.TrimSpace(c.DefaultQuery("order", "desc")))
+	if direction != "ASC" && direction != "DESC" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "order must be asc or desc"})
+		return filters, "", "", false
+	}
+	return filters, sortColumn, direction, true
 }
 
 func getTransaction(db *sql.DB) gin.HandlerFunc {

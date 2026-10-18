@@ -2,13 +2,12 @@ package main
 
 import (
 	"database/sql"
+
 	"github.com/gin-gonic/gin"
 )
 
-func Router(db *sql.DB) *gin.Engine {
-    router := gin.Default()
-
-    return router
+func Router() *gin.Engine {
+	return gin.Default()
 }
 
 func Categories(router *gin.Engine, db *sql.DB) {
@@ -25,4 +24,11 @@ func Transactions(router *gin.Engine, db *sql.DB) {
 	router.GET("/transactions/:id", getTransaction(db))
 	router.PUT("/transactions/:id", updateTransaction(db))
 	router.DELETE("/transactions/:id", deleteTransaction(db))
+}
+
+func Dashboard(router *gin.Engine, db *sql.DB) {
+	router.GET("/dashboard/summary", dashboardSummaryHandler(db))
+	router.GET("/dashboard/cashflow", dashboardCashflowHandler(db))
+	router.GET("/dashboard/expenses-by-category", expensesByCategoryHandler(db))
+	router.GET("/dashboard/recent-transactions", recentTransactionsHandler(db))
 }
