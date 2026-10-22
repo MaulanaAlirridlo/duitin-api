@@ -20,10 +20,17 @@ func main() {
 	}
 	defer db.Close()
 
+	jwtSecret, err := jwtSecretFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	router := Router()
-	Categories(router, db)
-	Transactions(router, db)
-	Dashboard(router, db)
+	Users(router, db, jwtSecret)
+	authenticate := authMiddleware(jwtSecret)
+	Categories(router, db, authenticate)
+	Transactions(router, db, authenticate)
+	Dashboard(router, db, authenticate)
 
 	if err := router.Run(); err != nil {
 		log.Fatal(err)

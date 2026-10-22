@@ -4,8 +4,10 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestParsePageOptions(t *testing.T) {
@@ -75,11 +77,17 @@ func TestSQLFiltersUseBoundParameters(t *testing.T) {
 func TestRouterRegistersAllAPIEndpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := Router()
-	Categories(router, nil)
-	Transactions(router, nil)
-	Dashboard(router, nil)
+	secret := []byte("test-secret-that-is-at-least-thirty-two-bytes")
+	Users(router, nil, secret)
+	authenticate := authMiddleware(secret)
+	Categories(router, nil, authenticate)
+	Transactions(router, nil, authenticate)
+	Dashboard(router, nil, authenticate)
 
 	want := map[string]bool{
+		"POST /auth/register":                 false,
+		"POST /auth/login":                    false,
+		"GET /users/me":                       false,
 		"POST /categories":                    false,
 		"GET /categories":                     false,
 		"GET /categories/:id":                 false,
@@ -105,6 +113,85 @@ func TestRouterRegistersAllAPIEndpoints(t *testing.T) {
 	for route, registered := range want {
 		if !registered {
 			t.Errorf("route %q is not registered", route)
+		}
+	}
+}
+
+func TestAuthMiddlewareRequiresValidToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := []byte("test-secret-that-is-at-least-thirty-two-bytes")
+	router := gin.New()
+	router.GET("/protected", authMiddleware(secret), func(c *gin.Context) {
+		if got := c.GetInt64(userIDContextKey); got != 42 {
+			t.Errorf("authenticated user ID = %d, want 42", got)
+		}
+		c.Status(204)
+	})
+
+	unauthorized := httptest.NewRecorder()
+	router.ServeHTTP(unauthorized, httptest.NewRequest("GET", "/protected", nil))
+	if unauthorized.Code != 401 {
+		t.Fatalf("request without token status = %d, want 401", unauthorized.Code)
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, userClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    jwtIssuer,
+			Subject:   "42",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute)),
+		},
+	})
+	signedToken, err := token.SignedString(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizedRequest := httptest.NewRequest("GET", "/protected", nil)
+	authorizedRequest.Header.Set("Authorization", "Bearer "+signedToken)
+	authorized := httptest.NewRecorder()
+	router.ServeHTTP(authorized, authorizedRequest)
+	if authorized.Code != 204 {
+		t.Fatalf("request with valid token status = %d, want 204", authorized.Code)
+	}
+
+	expiredToken := jwt.NewWithClaims(jwt.SigningMethodHS256, userClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    jwtIssuer,
+			Subject:   "42",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Minute)),
+		},
+	})
+	signedExpiredToken, err := expiredToken.SignedString(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredRequest := httptest.NewRequest("GET", "/protected", nil)
+	expiredRequest.Header.Set("Authorization", "Bearer "+signedExpiredToken)
+	expired := httptest.NewRecorder()
+	router.ServeHTTP(expired, expiredRequest)
+	if expired.Code != 401 {
+		t.Fatalf("request with expired token status = %d, want 401", expired.Code)
+	}
+}
+
+func TestValidateRegisterUserInput(t *testing.T) {
+	valid := registerUserInput{
+		Name:     "Example User",
+		Email:    "user@example.com",
+		Password: "correct horse battery staple",
+	}
+	if message := validateRegisterUserInput(valid); message != "" {
+		t.Fatalf("valid registration input rejected: %s", message)
+	}
+
+	invalidInputs := []registerUserInput{
+		{Name: "", Email: valid.Email, Password: valid.Password},
+		{Name: valid.Name, Email: "not-an-email", Password: valid.Password},
+		{Name: valid.Name, Email: valid.Email, Password: "short"},
+		{Name: valid.Name, Email: valid.Email, Password: string(make([]byte, 73))},
+	}
+	for _, input := range invalidInputs {
+		if message := validateRegisterUserInput(input); message == "" {
+			t.Errorf("validateRegisterUserInput(%+v) accepted invalid input", input)
 		}
 	}
 }

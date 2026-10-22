@@ -40,10 +40,10 @@ func createCategory(db *sql.DB) gin.HandlerFunc {
 
 		var category Category
 		err := db.QueryRowContext(c.Request.Context(),
-			`INSERT INTO categories (name, type, created_at)
-			 VALUES ($1, $2, CURRENT_TIMESTAMP)
+			`INSERT INTO categories (user_id, name, type, created_at)
+			 VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
 			 RETURNING id, name, type, created_at`,
-			input.Name, input.Type,
+			c.GetInt64(userIDContextKey), input.Name, input.Type,
 		).Scan(&category.ID, &category.Name, &category.Type, &category.CreatedAt)
 		if err != nil {
 			log.Printf("create category: %v", err)
@@ -61,6 +61,7 @@ func listCategories(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 		filters := sqlFilters{}
+		filters.add("user_id = ?", c.GetInt64(userIDContextKey))
 		if categoryType := strings.TrimSpace(c.Query("type")); categoryType != "" {
 			if categoryType != "income" && categoryType != "expense" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "type must be either income or expense"})
@@ -120,7 +121,7 @@ func getCategory(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		category, err := findCategory(c, db, id)
+		category, err := findCategory(c, db, id, c.GetInt64(userIDContextKey))
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
 			return
@@ -155,9 +156,9 @@ func updateCategory(db *sql.DB) gin.HandlerFunc {
 		err := db.QueryRowContext(c.Request.Context(),
 			`UPDATE categories
 			 SET name = $1, type = $2
-			 WHERE id = $3
+			 WHERE id = $3 AND user_id = $4
 			 RETURNING id, name, type, created_at`,
-			input.Name, input.Type, id,
+			input.Name, input.Type, id, c.GetInt64(userIDContextKey),
 		).Scan(&category.ID, &category.Name, &category.Type, &category.CreatedAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
@@ -180,8 +181,8 @@ func deleteCategory(db *sql.DB) gin.HandlerFunc {
 		}
 
 		result, err := db.ExecContext(c.Request.Context(),
-			`DELETE FROM categories WHERE id = $1`,
-			id,
+			`DELETE FROM categories WHERE id = $1 AND user_id = $2`,
+			id, c.GetInt64(userIDContextKey),
 		)
 		if err != nil {
 			var postgresError *pgconn.PgError
@@ -207,13 +208,13 @@ func deleteCategory(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
-func findCategory(c *gin.Context, db *sql.DB, id int64) (Category, error) {
+func findCategory(c *gin.Context, db *sql.DB, id, userID int64) (Category, error) {
 	var category Category
 	err := db.QueryRowContext(c.Request.Context(),
 		`SELECT id, name, type, created_at
 		 FROM categories
-		 WHERE id = $1`,
-		id,
+		 WHERE id = $1 AND user_id = $2`,
+		id, userID,
 	).Scan(&category.ID, &category.Name, &category.Type, &category.CreatedAt)
 	return category, err
 }

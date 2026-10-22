@@ -71,10 +71,10 @@ func insertTransaction(c *gin.Context, db *sql.DB, input transactionInput) (Tran
 	var transactionDate time.Time
 	err := db.QueryRowContext(c.Request.Context(),
 		`INSERT INTO transactions
-			(title, amount, type, category_id, transaction_date, description, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		(user_id, title, amount, type, category_id, transaction_date, description, created_at, updated_at)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		 RETURNING id, title, amount::text, type, category_id, transaction_date, description, created_at, updated_at`,
-		input.Title, string(input.Amount), input.Type, input.CategoryID, input.TransactionDate, input.Description,
+		c.GetInt64(userIDContextKey), input.Title, string(input.Amount), input.Type, input.CategoryID, input.TransactionDate, input.Description,
 	).Scan(
 		&transaction.ID, &transaction.Title, &amount, &transaction.Type,
 		&transaction.CategoryID, &transactionDate, &transaction.Description,
@@ -143,6 +143,7 @@ func listTransactions(db *sql.DB) gin.HandlerFunc {
 
 func transactionListFilters(c *gin.Context) (sqlFilters, string, string, bool) {
 	filters := sqlFilters{}
+	filters.add("user_id = ?", c.GetInt64(userIDContextKey))
 	if transactionType := strings.TrimSpace(c.Query("type")); transactionType != "" {
 		if utf8.RuneCountInString(transactionType) > 20 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "type must be at most 20 characters"})
@@ -195,7 +196,7 @@ func getTransaction(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		transaction, err := findTransaction(c, db, id)
+		transaction, err := findTransaction(c, db, id, c.GetInt64(userIDContextKey))
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "transaction not found"})
 			return
@@ -252,10 +253,10 @@ func updateTransactionRecord(c *gin.Context, db *sql.DB, id int64, input transac
 		`UPDATE transactions
 		 SET title = $1, amount = $2, type = $3, category_id = $4,
 		     transaction_date = $5, description = $6, updated_at = CURRENT_TIMESTAMP
-		 WHERE id = $7
+		 WHERE id = $7 AND user_id = $8
 		 RETURNING id, title, amount::text, type, category_id, transaction_date, description, created_at, updated_at`,
 		input.Title, string(input.Amount), input.Type, input.CategoryID,
-		input.TransactionDate, input.Description, id,
+		input.TransactionDate, input.Description, id, c.GetInt64(userIDContextKey),
 	).Scan(
 		&transaction.ID, &transaction.Title, &amount, &transaction.Type,
 		&transaction.CategoryID, &transactionDate, &transaction.Description,
@@ -277,8 +278,8 @@ func deleteTransaction(db *sql.DB) gin.HandlerFunc {
 		}
 
 		result, err := db.ExecContext(c.Request.Context(),
-			`DELETE FROM transactions WHERE id = $1`,
-			id,
+			`DELETE FROM transactions WHERE id = $1 AND user_id = $2`,
+			id, c.GetInt64(userIDContextKey),
 		)
 		if err != nil {
 			log.Printf("delete transaction %d: %v", id, err)
@@ -316,12 +317,12 @@ func scanTransaction(scanner interface{ Scan(...any) error }) (Transaction, erro
 	return transaction, nil
 }
 
-func findTransaction(c *gin.Context, db *sql.DB, id int64) (Transaction, error) {
+func findTransaction(c *gin.Context, db *sql.DB, id, userID int64) (Transaction, error) {
 	row := db.QueryRowContext(c.Request.Context(),
 		`SELECT id, title, amount::text, type, category_id, transaction_date, description, created_at, updated_at
 		 FROM transactions
-		 WHERE id = $1`,
-		id,
+		 WHERE id = $1 AND user_id = $2`,
+		id, userID,
 	)
 	return scanTransaction(row)
 }
@@ -366,5 +367,7 @@ func validateTransactionInput(input *transactionInput) string {
 
 func isCategoryForeignKeyError(err error) bool {
 	var postgresError *pgconn.PgError
-	return errors.As(err, &postgresError) && postgresError.Code == "23503"
+	return errors.As(err, &postgresError) &&
+		postgresError.Code == "23503" &&
+		postgresError.ConstraintName == "fk_transaction_category"
 }

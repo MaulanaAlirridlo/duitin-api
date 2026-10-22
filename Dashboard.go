@@ -84,6 +84,7 @@ func dashboardCashflowHandler(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 		filters := sqlFilters{}
+		filters.add("user_id = ?", c.GetInt64(userIDContextKey))
 		addDateRange(&filters, "transaction_date", dates)
 		if !addOptionalCategoryFilter(c, &filters) {
 			return
@@ -142,6 +143,7 @@ func expensesByCategoryHandler(db *sql.DB) gin.HandlerFunc {
 		}
 		filters := sqlFilters{}
 		filters.clauses = append(filters.clauses, "t.type = 'expense'")
+		filters.add("t.user_id = ?", c.GetInt64(userIDContextKey))
 		addDateRange(&filters, "t.transaction_date", dates)
 		filters.addSearch("c.name", c.Query("search"))
 
@@ -149,7 +151,7 @@ func expensesByCategoryHandler(db *sql.DB) gin.HandlerFunc {
 		countQuery := `SELECT COUNT(*) FROM (
 			SELECT c.id
 			FROM categories c
-			JOIN transactions t ON t.category_id = c.id
+			JOIN transactions t ON t.category_id = c.id AND t.user_id = c.user_id
 			` + filters.where() + `
 			GROUP BY c.id
 		) AS grouped_categories`
@@ -162,7 +164,7 @@ func expensesByCategoryHandler(db *sql.DB) gin.HandlerFunc {
 		rows, err := db.QueryContext(c.Request.Context(),
 			`SELECT c.id, c.name, SUM(t.amount)::text, COUNT(*)
 			 FROM categories c
-			 JOIN transactions t ON t.category_id = c.id
+			 JOIN transactions t ON t.category_id = c.id AND t.user_id = c.user_id
 			 `+filters.where()+`
 			 GROUP BY c.id, c.name
 			 ORDER BY SUM(t.amount) DESC, c.id
@@ -256,6 +258,7 @@ func dashboardFilters(c *gin.Context, defaultDates bool) (sqlFilters, bool) {
 		return sqlFilters{}, false
 	}
 	filters := sqlFilters{}
+	filters.add("user_id = ?", c.GetInt64(userIDContextKey))
 	addDateRange(&filters, "transaction_date", dates)
 	if !addOptionalCategoryFilter(c, &filters) {
 		return sqlFilters{}, false
