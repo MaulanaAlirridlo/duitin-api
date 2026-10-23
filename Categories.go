@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,12 +19,16 @@ type Category struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
 	Type      string    `json:"type"`
+	Icon      string    `json:"icon"`
+	Color     string    `json:"color"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 type categoryInput struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Icon  string `json:"icon"`
+	Color string `json:"color"`
 }
 
 func createCategory(db *sql.DB) gin.HandlerFunc {
@@ -40,11 +45,11 @@ func createCategory(db *sql.DB) gin.HandlerFunc {
 
 		var category Category
 		err := db.QueryRowContext(c.Request.Context(),
-			`INSERT INTO categories (user_id, name, type, created_at)
-			 VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-			 RETURNING id, name, type, created_at`,
-			c.GetInt64(userIDContextKey), input.Name, input.Type,
-		).Scan(&category.ID, &category.Name, &category.Type, &category.CreatedAt)
+			`INSERT INTO categories (user_id, name, type, icon, color, created_at)
+			 VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+			 RETURNING id, name, type, icon, color, created_at`,
+			c.GetInt64(userIDContextKey), input.Name, input.Type, input.Icon, input.Color,
+		).Scan(&category.ID, &category.Name, &category.Type, &category.Icon, &category.Color, &category.CreatedAt)
 		if err != nil {
 			log.Printf("create category: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create category"})
@@ -82,7 +87,10 @@ func listCategories(db *sql.DB) gin.HandlerFunc {
 		}
 
 		rows, err := db.QueryContext(c.Request.Context(),
-			`SELECT id, name, type, created_at
+			`SELECT id, name, type,
+			        COALESCE(icon, CASE type WHEN 'income' THEN '💰' ELSE '📦' END),
+			        COALESCE(color, CASE type WHEN 'income' THEN '#10b981' ELSE '#f59e0b' END),
+			        created_at
 			 FROM categories`+filters.where()+`
 			 ORDER BY id
 			 LIMIT $`+strconv.Itoa(len(filters.args)+1)+` OFFSET $`+strconv.Itoa(len(filters.args)+2),
@@ -98,7 +106,7 @@ func listCategories(db *sql.DB) gin.HandlerFunc {
 		categories := make([]Category, 0)
 		for rows.Next() {
 			var category Category
-			if err := rows.Scan(&category.ID, &category.Name, &category.Type, &category.CreatedAt); err != nil {
+			if err := rows.Scan(&category.ID, &category.Name, &category.Type, &category.Icon, &category.Color, &category.CreatedAt); err != nil {
 				log.Printf("read category: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "could not read categories"})
 				return
@@ -155,11 +163,11 @@ func updateCategory(db *sql.DB) gin.HandlerFunc {
 		var category Category
 		err := db.QueryRowContext(c.Request.Context(),
 			`UPDATE categories
-			 SET name = $1, type = $2
-			 WHERE id = $3 AND user_id = $4
-			 RETURNING id, name, type, created_at`,
-			input.Name, input.Type, id, c.GetInt64(userIDContextKey),
-		).Scan(&category.ID, &category.Name, &category.Type, &category.CreatedAt)
+			 SET name = $1, type = $2, icon = $3, color = $4
+			 WHERE id = $5 AND user_id = $6
+			 RETURNING id, name, type, icon, color, created_at`,
+			input.Name, input.Type, input.Icon, input.Color, id, c.GetInt64(userIDContextKey),
+		).Scan(&category.ID, &category.Name, &category.Type, &category.Icon, &category.Color, &category.CreatedAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
 			return
@@ -211,11 +219,14 @@ func deleteCategory(db *sql.DB) gin.HandlerFunc {
 func findCategory(c *gin.Context, db *sql.DB, id, userID int64) (Category, error) {
 	var category Category
 	err := db.QueryRowContext(c.Request.Context(),
-		`SELECT id, name, type, created_at
+		`SELECT id, name, type,
+		        COALESCE(icon, CASE type WHEN 'income' THEN '💰' ELSE '📦' END),
+		        COALESCE(color, CASE type WHEN 'income' THEN '#10b981' ELSE '#f59e0b' END),
+		        created_at
 		 FROM categories
 		 WHERE id = $1 AND user_id = $2`,
 		id, userID,
-	).Scan(&category.ID, &category.Name, &category.Type, &category.CreatedAt)
+	).Scan(&category.ID, &category.Name, &category.Type, &category.Icon, &category.Color, &category.CreatedAt)
 	return category, err
 }
 
@@ -241,5 +252,21 @@ func validateCategoryInput(input *categoryInput) string {
 	if input.Type != "income" && input.Type != "expense" {
 		return "type must be either income or expense"
 	}
+	input.Icon = strings.TrimSpace(input.Icon)
+	if input.Icon == "" {
+		input.Icon = map[string]string{"income": "💰", "expense": "📦"}[input.Type]
+	}
+	if utf8.RuneCountInString(input.Icon) > 28 {
+		return "icon must be at most 28 characters"
+	}
+	input.Color = strings.TrimSpace(input.Color)
+	if input.Color == "" {
+		input.Color = map[string]string{"income": "#10b981", "expense": "#f59e0b"}[input.Type]
+	}
+	if !categoryColorPattern.MatchString(input.Color) {
+		return "color must be a 7-character hex color"
+	}
 	return ""
 }
+
+var categoryColorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)

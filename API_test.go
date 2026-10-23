@@ -3,6 +3,7 @@ package main
 import (
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -192,6 +193,31 @@ func TestValidateRegisterUserInput(t *testing.T) {
 	for _, input := range invalidInputs {
 		if message := validateRegisterUserInput(input); message == "" {
 			t.Errorf("validateRegisterUserInput(%+v) accepted invalid input", input)
+		}
+	}
+}
+
+func TestValidateCategoryInput(t *testing.T) {
+	input := categoryInput{Name: "Makan", Type: "expense", Icon: "🍜", Color: "#64748b"}
+	if message := validateCategoryInput(&input); message != "" {
+		t.Fatalf("valid category input rejected: %s", message)
+	}
+
+	defaults := categoryInput{Name: "Gaji", Type: "income"}
+	if message := validateCategoryInput(&defaults); message != "" {
+		t.Fatalf("category without icon or color rejected: %s", message)
+	}
+	if defaults.Icon != "💰" || defaults.Color != "#10b981" {
+		t.Fatalf("default icon and color = %q, %q", defaults.Icon, defaults.Color)
+	}
+
+	invalidInputs := []categoryInput{
+		{Name: "Kategori", Type: "expense", Icon: strings.Repeat("a", 29), Color: "#64748b"},
+		{Name: "Kategori", Type: "expense", Icon: "📦", Color: "blue"},
+	}
+	for _, invalid := range invalidInputs {
+		if message := validateCategoryInput(&invalid); message == "" {
+			t.Errorf("validateCategoryInput(%+v) accepted invalid input", invalid)
 		}
 	}
 }
